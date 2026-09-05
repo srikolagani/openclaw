@@ -58,9 +58,12 @@ export function resolveRateLimitProfileRotationLimit(): number {
 export function resolveTransientRetryDelayMs(params: {
   retryNumber: number;
   retryAfterMs?: number;
-  elapsedMs: number;
+  elapsedMs?: number;
 }): number | undefined {
-  const remainingMs = MAX_TRANSIENT_RETRY_TIME_MS - Math.max(0, params.elapsedMs);
+  const remainingMs =
+    params.elapsedMs === undefined
+      ? Infinity
+      : MAX_TRANSIENT_RETRY_TIME_MS - Math.max(0, params.elapsedMs);
   if (remainingMs <= 0) {
     return undefined;
   }

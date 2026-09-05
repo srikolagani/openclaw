@@ -1,11 +1,17 @@
-import type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  ChatEvent,
+  ChatRunStartupPhase,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { t } from "../../i18n/index.ts";
 
 export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
 
 export type ChatRunStartupState =
-  | { state: "status"; runId: string; phase: ChatRunStartupPhase; seq?: number }
+  | ({ state: "status"; runId: string; seq?: number } & (
+      | { phase: ChatRunStartupPhase; retry?: never }
+      | { retry: NonNullable<Extract<ChatEvent, { state: "status" }>["retry"]>; phase?: never }
+    ))
   | { state: "activity"; runId: string };
 
 export type ChatRunStartupStatus = Extract<ChatRunStartupState, { state: "status" }>;
@@ -21,8 +27,10 @@ export function reconcileChatRunStartup(
   const current = host.chatRunStartup;
   if (current?.runId === next.runId && next.state === "status") {
     if (
-      current.state === "activity" ||
-      (current.seq !== undefined && (next.seq === undefined || next.seq <= current.seq))
+      (current.state === "activity" && !next.retry) ||
+      (current.state === "status" &&
+        current.seq !== undefined &&
+        (next.seq === undefined || next.seq <= current.seq))
     ) {
       return;
     }
@@ -45,7 +53,12 @@ export function chatStartupStatusLabel(
   placement: ApplicationPlacementStartupStatus | null | undefined,
 ): string | undefined {
   if (run) {
-    return t(STARTUP_LABEL_KEYS[run.phase]);
+    return run.retry
+      ? t("chat.startupStatus.retrying", {
+          attempt: String(run.retry.attempt),
+          maxAttempts: String(run.retry.maxAttempts),
+        })
+      : t(STARTUP_LABEL_KEYS[run.phase]);
   }
   switch (placement?.phase) {
     case "pending":

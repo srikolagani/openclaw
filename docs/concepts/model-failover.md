@@ -273,7 +273,11 @@ If all profiles for a provider fail, OpenClaw moves to the next model in `agents
 
 Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits.
 
-The embedded failover controller owns transient retries, including overloads and server errors. `retry.provider.maxRetries` sets the retry budget (default: 3), with jittered backoff, provider retry pacing, and a fixed 90-second retry window. Once that budget or window is exhausted, recovery proceeds to profile rotation, configured model fallback, or a visible error. Provider SDKs and the reply runner do not add separate replay loops. Retry and any fallback winner remain turn-local, and replay-unsafe attempts are not retried.
+The embedded failover controller owns transient retries. Rate-limited requests get up to **10 total attempts** before profile rotation or model fallback. Waits grow exponentially (about 1, 2, 4, 8 seconds, capped at 30 seconds) with jitter. Provider `retry-after` and `retry-after-ms` hints set a minimum wait, even when longer than the cap. This rate-limit budget is built in; no configuration option is required. Cancellation and the run deadline still stop recovery.
+
+Other transient failures, including overloads and server errors, retain the `retry.provider.maxRetries` budget (default: 3 retries) and a fixed 90-second retry window. Once the applicable budget is exhausted, recovery proceeds to profile rotation, configured model fallback, or a visible error. Provider SDKs and the reply runner do not add separate replay loops. Retry and any fallback winner remain turn-local, and replay-unsafe attempts are not retried.
+
+While waiting, the Control UI replaces its working text with one transient **Retrying… n/10** indicator. Attempt failures do not become transcript messages; only a terminal failure persists an error. Historical empty error rows are hidden when a later assistant reply recovers the same turn, and only the last error remains in an unrecovered turn.
 
 Visible failure messages preserve the provider's HTTP status independently of retry classification. A provider HTTP 500 remains a server error in the final reply, even when recovery groups it with timeout-shaped failures. Raw provider response details stay out of that reply.
 

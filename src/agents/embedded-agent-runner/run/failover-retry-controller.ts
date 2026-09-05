@@ -1,4 +1,5 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import {
   type AuthProfileFailureReason,
@@ -24,6 +25,9 @@ import {
   resolveRateLimitProfileRotationLimit,
 } from "./helpers.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+
+const MAX_RATE_LIMIT_ATTEMPTS = 10;
+const RETRY_SLEEP_CHUNK_MS = 24 * 60 * 60 * 1000;
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 type AuthRetryTrace = TraceAttempt & { reason: FailoverReason };
@@ -62,6 +66,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
   const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit();
   let rateLimitProfileRotations = 0;
   let transientRetryCount = 0;
+  let rateLimitSeen = false;
   let transientRetryBudget = MAX_TRANSIENT_RETRIES;
   // Wall-clock anchor set at the first transient consult so the 90s budget
   // counts failed-request time, not only backoff sleeps; a slow provider
@@ -70,7 +75,13 @@ export function createEmbeddedRunFailoverRetryController(input: {
 
   const sleepForRetry = async (delayMs: number) => {
     try {
-      await sleepWithAbort(delayMs, params.abortSignal);
+      // The shared sleep helper caps one timer; provider floors can exceed that cap.
+      let remainingMs = delayMs;
+      while (remainingMs > 0) {
+        const chunkMs = Math.min(remainingMs, RETRY_SLEEP_CHUNK_MS);
+        await sleepWithAbort(chunkMs, params.abortSignal);
+        remainingMs -= chunkMs;
+      }
     } catch (error) {
       if (!params.abortSignal?.aborted) {
         throw error;
@@ -231,15 +242,21 @@ export function createEmbeddedRunFailoverRetryController(input: {
       ) {
         return false;
       }
-      if (transientRetryCount >= transientRetryBudget) {
+      const rateLimit = retry.reason === "rate_limit";
+      rateLimitSeen ||= rateLimit;
+      const retryCount = transientRetryCount;
+      const retryBudget = rateLimit
+        ? MAX_RATE_LIMIT_ATTEMPTS - 1
+        : Math.min(transientRetryBudget, rateLimitSeen ? MAX_RATE_LIMIT_ATTEMPTS - 1 : Infinity);
+      if (retryCount >= retryBudget) {
         return false;
       }
       const nowMs = Date.now();
       transientRetryWindowStartMs ??= nowMs;
       const delayMs = resolveTransientRetryDelayMs({
-        retryNumber: transientRetryCount + 1,
+        retryNumber: retryCount + 1,
         retryAfterMs: retry.retryAfterMs,
-        elapsedMs: nowMs - transientRetryWindowStartMs,
+        elapsedMs: rateLimit ? undefined : nowMs - transientRetryWindowStartMs,
       });
       if (delayMs === undefined) {
         // The window in resolveTransientRetryDelayMs outranks the attempt budget when
@@ -251,8 +268,21 @@ export function createEmbeddedRunFailoverRetryController(input: {
         return false;
       }
       log.warn(
-        `transient same-model retry ${transientRetryCount + 1}/${transientRetryBudget} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs}`,
+        `transient same-model retry ${retryCount + 1}/${retryBudget} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs}`,
       );
+      if (rateLimit) {
+        emitAgentEvent({
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          stream: "run_status",
+          data: {
+            phase: "retrying",
+            reason: "rate_limit",
+            attempt: retryCount + 2,
+            maxAttempts: MAX_RATE_LIMIT_ATTEMPTS,
+          },
+        });
+      }
       await sleepForRetry(delayMs);
       transientRetryCount += 1;
       return true;

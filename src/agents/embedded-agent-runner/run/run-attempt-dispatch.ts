@@ -510,10 +510,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
     beforeAgentFinalizeRevisionAttempts: input.beforeAgentFinalizeRevisionAttempts,
     maxBeforeAgentFinalizeRevisions: input.maxBeforeAgentFinalizeRevisions,
     suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
-    suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
+    assistantErrorTranscript: params.assistantErrorTranscript,
     onUserMessagePersisted: control.onUserMessagePersisted,
     onUserMessagePersistenceInvalidated: control.onUserMessagePersistenceInvalidated,
-    onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
   };
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({

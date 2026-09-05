@@ -140,18 +140,23 @@ describe("normalizeAssistantReplayContent", () => {
     expect(out).toEqual([blankString, { ...blankArray, content: "" }, urlOnly]);
   });
 
-  it("converts mid-turn assistant content: [] to a non-empty sentinel text block when stopReason is error", () => {
-    // Mid-turn failure sentinels preserve request turn ordering without
-    // pretending the failed assistant generated useful content.
-    const messages = [userMessage("hello"), bedrockAssistant([], "error"), userMessage("retry")];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).not.toBe(messages);
-    const repaired = out[1] as AgentMessage & { content: { type: string; text: string }[] };
-    expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
-    // Trailing user is preserved so request still ends with user.
-    expect(out).toHaveLength(3);
-    expect((out[2] as { role: string }).role).toBe("user");
-  });
+  it.each([{ content: [] }, { content: [{ type: "text", text: FALLBACK_TEXT }] }])(
+    "drops failed attempt content $content before a later reply and across user turns",
+    ({ content }) => {
+      const before = userMessage("hello");
+      const reply = bedrockAssistant([{ type: "text", text: "recovered" }], "stop");
+      const after = userMessage("continue");
+      expect(
+        normalizeAssistantReplayContent([
+          before,
+          bedrockAssistant(content, "error"),
+          bedrockAssistant(content, "error"),
+          reply,
+          after,
+        ]),
+      ).toEqual([before, reply, after]);
+    },
+  );
 
   it("drops blank user text messages from replay", () => {
     const messages = [
@@ -204,23 +209,17 @@ describe("normalizeAssistantReplayContent", () => {
     expect(out[1]).toBe(silentStop);
   });
 
-  it("converts mid-turn zero-usage empty stop turns to a replay sentinel", () => {
-    const falseSuccessStop = bedrockAssistant([], "stop");
-    const messages = [userMessage("hello"), falseSuccessStop, userMessage("retry")];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).not.toBe(messages);
-    const repaired = out[1] as AgentMessage & { content: { type: string; text: string }[] };
-    expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
-  });
-
-  it("converts mid-turn zero-usage null stop turns to a replay sentinel", () => {
-    const falseSuccessStop = bedrockAssistant(null, "stop");
-    const messages = [userMessage("hello"), falseSuccessStop, userMessage("retry")];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).not.toBe(messages);
-    const repaired = out[1] as AgentMessage & { content: { type: string; text: string }[] };
-    expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
-  });
+  it.each([{ content: [] }, { content: null }])(
+    "drops mid-turn zero-usage empty stop content $content",
+    ({ content }) => {
+      const messages = [
+        userMessage("hello"),
+        bedrockAssistant(content, "stop"),
+        userMessage("retry"),
+      ];
+      expect(normalizeAssistantReplayContent(messages)).toEqual([messages[0], messages[2]]);
+    },
+  );
 
   it("preserves empty content with non-error stopReasons (toolUse, length) untouched", () => {
     // Boundary lock: only `stopReason:"error"` should trip the sentinel

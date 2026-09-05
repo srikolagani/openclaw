@@ -18,6 +18,7 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
+import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
@@ -254,6 +255,67 @@ async function streamIncompleteMistralResponseOverLoopback() {
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it("exhausts ten rate-limited attempts before model failover without rotating early", async () => {
+    vi.useFakeTimers();
+    const { input } = makeExhaustedCredentialFailureInput();
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "openai",
+      model: "mock/model",
+      content: [],
+      stopReason: "error",
+      errorCode: "rate_limit_exceeded",
+      errorMessage: "provider rate limit",
+      errorBody: JSON.stringify({ headers: { "retry-after": "1", "retry-after-ms": "335" } }),
+    });
+    input.attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    input.attemptAssistant = input.currentAttemptAssistant = assistant;
+    input.terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt: input.attempt,
+      assistant,
+    });
+    input.provider = "openai";
+    input.activeErrorContext = { provider: "openai", model: "mock/model" };
+    const advanceAuthProfile = vi.fn(async () => false);
+    const controller = createEmbeddedRunFailoverRetryController({
+      runParams: { ...input.runParams, sessionFile: "/tmp/mock-session.jsonl" },
+      provider: "openai",
+      modelId: "mock/model",
+      globalLane: "test",
+      agentDir: input.agentDir,
+      fallbackConfigured: true,
+      profileFailureStore: { version: 1, profiles: {} },
+      getLastProfileId: () => undefined,
+      getSessionId: () => input.runParams.sessionId,
+      harnessOwnsTransport: () => false,
+      getRuntimeAuthOwnerId: () => "embedded",
+      getApiKeyInfo: () => null,
+      advanceAuthProfile,
+    });
+    input.maybeRetryTransient = controller.maybeRetryTransient;
+    input.getTransientRetryCount = () => controller.transientRetryCount;
+    input.advanceRateLimitAuthProfile = controller.advanceRateLimitAuthProfile;
+    try {
+      for (let attempt = 1; attempt < 10; attempt++) {
+        const result = handleEmbeddedAssistantFailure(input);
+        await vi.runAllTimersAsync();
+        await expect(result).resolves.toMatchObject({ action: "retry" });
+        expect(advanceAuthProfile).not.toHaveBeenCalled();
+      }
+      await expect(handleEmbeddedAssistantFailure(input)).rejects.toMatchObject({
+        name: "FailoverError",
+        reason: "rate_limit",
+        status: 429,
+      });
+      expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+      expect(input.traceAttempts).toHaveLength(10);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   beforeEach(() => {
     providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
   });

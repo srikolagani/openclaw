@@ -1,4 +1,6 @@
 import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import milliseconds from "ms";
 import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
@@ -91,14 +93,35 @@ function parseRetryAfterSeconds(valueText: string, nowMs: number): number | unde
   return retryAtMs === undefined ? undefined : Math.max(0, (retryAtMs - nowMs) / 1000);
 }
 
-/** Extracts a bounded retry hint from provider error text. */
+/** Extracts the provider retry floor from error text and serialized response headers. */
 export function resolveRetryAfterMs(
   message: string | undefined,
   nowMs = Date.now(),
+  errorBody?: unknown,
 ): number | undefined {
+  const body =
+    typeof errorBody === "string" ? safeParseJsonRecord(errorBody) : asOptionalRecord(errorBody);
+  const headers = asOptionalRecord(body?.headers);
+  const hints = Object.entries(headers ?? {}).flatMap(([name, value]) => {
+    const key = name.toLowerCase();
+    if (
+      (key !== "retry-after" && key !== "retry-after-ms") ||
+      (typeof value !== "string" && typeof value !== "number")
+    ) {
+      return [];
+    }
+    const seconds = parseRetryAfterSeconds(
+      `${value}${key === "retry-after-ms" ? "ms" : ""}`,
+      nowMs,
+    );
+    return seconds === undefined ? [] : [seconds];
+  });
   const value = message?.trim() ? RETRY_AFTER_VALUE_RE.exec(message)?.[1]?.trim() : undefined;
   const seconds = value ? parseRetryAfterSeconds(value, nowMs) : undefined;
-  return seconds === undefined ? undefined : Math.ceil(seconds * 1000);
+  if (seconds !== undefined) {
+    hints.push(seconds);
+  }
+  return hints.length ? Math.ceil(Math.max(...hints) * 1000) : undefined;
 }
 
 /** Classify provider rate-limit text without deciding a caller's retry policy. */

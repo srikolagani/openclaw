@@ -1,7 +1,11 @@
+import { GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty as normalizeErrorSignal } from "@openclaw/normalization-core/string-coerce";
 import { isContextOverflowError } from "../agents/failover/classify.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
+import {
+  isStreamErrorFallbackContent,
+  STREAM_ERROR_FALLBACK_TEXT,
+} from "../agents/stream-message-shared.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import {
   readNestedToolActivity,
@@ -12,7 +16,7 @@ import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
   hasAssistantDisplayableNonTextContent,
-  hasAssistantNonTextContent,
+  hasTranscriptMediaFacts,
   isAssistantTextContentType,
 } from "./chat-display-projection.helpers.js";
 import {
@@ -111,7 +115,6 @@ type ChatDisplayProjectionResult = {
   streamErrorFallbackRepaired: boolean;
 };
 
-const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before producing a reply.";
 const GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT =
   "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.";
 
@@ -198,11 +201,10 @@ function isPureStreamErrorFallbackAssistantMessage(message: Record<string, unkno
   if (message.role !== "assistant" || message.stopReason !== "error") {
     return false;
   }
-  const text = extractAssistantTextForSilentCheck(message);
   return (
-    text !== undefined &&
-    text.trim() === STREAM_ERROR_FALLBACK_TEXT &&
-    !hasAssistantNonTextContent(message)
+    !hasTranscriptMediaFacts(message) &&
+    isStreamErrorFallbackContent(message.content) &&
+    isStreamErrorFallbackContent(message.text)
   );
 }
 
@@ -221,7 +223,7 @@ function hasVisibleAssistantDisplayContent(message: Record<string, unknown>): bo
   if (shouldDropAssistantHistoryMessage(sanitized)) {
     return false;
   }
-  if (hasAssistantDisplayableNonTextContent(sanitized)) {
+  if (hasAssistantDisplayableNonTextContent(sanitized) || hasTranscriptMediaFacts(sanitized)) {
     return true;
   }
   const text = extractAssistantTextForSilentCheck(sanitized);
@@ -238,8 +240,7 @@ function projectRepairedStreamErrorFallbackMessages(
 } {
   let pending = initialPending;
   let repaired = false;
-  let changed = false;
-  let pendingIndexes: number[] = [];
+  let pendingIndex: number | undefined;
   const repairedIndexes = new Set<number>();
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
@@ -248,29 +249,24 @@ function projectRepairedStreamErrorFallbackMessages(
     }
     if (message.role === "user") {
       pending = false;
-      pendingIndexes = [];
+      pendingIndex = undefined;
       continue;
     }
-    if (isPureStreamErrorFallbackAssistantMessage(message)) {
-      pending = true;
-      pendingIndexes.push(index);
+    const isFallback = isPureStreamErrorFallbackAssistantMessage(message);
+    if (!isFallback && (!pending || !hasVisibleAssistantDisplayContent(message))) {
       continue;
     }
-    if (!pending || !hasVisibleAssistantDisplayContent(message)) {
-      continue;
+    repaired ||= pending;
+    if (pendingIndex !== undefined) {
+      repairedIndexes.add(pendingIndex);
     }
-    repaired = true;
-    pending = false;
-    if (pendingIndexes.length > 0) {
-      changed = true;
-      for (const pendingIndex of pendingIndexes) {
-        repairedIndexes.add(pendingIndex);
-      }
-      pendingIndexes = [];
-    }
+    pending = isFallback;
+    pendingIndex = isFallback ? index : undefined;
   }
   return {
-    messages: changed ? messages.filter((_, index) => !repairedIndexes.has(index)) : messages,
+    messages: repairedIndexes.size
+      ? messages.filter((_, index) => !repairedIndexes.has(index))
+      : messages,
     pending,
     repaired,
   };
@@ -284,7 +280,8 @@ function projectEmptyAssistantErrorMessages(
     if (message.role !== "assistant" || message.stopReason !== "error") {
       return message;
     }
-    const hasDisplayableStructuredContent = hasAssistantDisplayableNonTextContent(message);
+    const hasDisplayableStructuredContent =
+      hasAssistantDisplayableNonTextContent(message) || hasTranscriptMediaFacts(message);
     if (hasDisplayableStructuredContent) {
       changed = true;
       return sanitizeAssistantErrorDisplayMessage(message);
