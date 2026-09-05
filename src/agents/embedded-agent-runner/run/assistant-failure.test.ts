@@ -270,7 +270,7 @@ describe("handleEmbeddedAssistantFailure", () => {
       assistantProfileFailureReason: null,
       emptyErrorRetries: 0,
     });
-    expect(fixture.input.failover.maybeRetryTransient).not.toHaveBeenCalled();
+    expect(fixture.traceAttempts).toEqual([]);
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
     expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
