@@ -489,7 +489,9 @@ uses the requesting session's loaded title, not the open conversation's title. I
 metadata is unavailable, the normal session-name fallback remains until it loads.
 This label does not change which request the approval buttons resolve.
 
-### This Mac (macOS app)
+<a id="this-mac-macos-app" />
+
+### This device (macOS and iOS apps)
 
 Inside the [macOS app](/platforms/macos), Settings includes a **This Mac** group
 for settings on that Mac. **This Mac** (`/settings/device`) contains app behavior,
@@ -500,8 +502,17 @@ and actions, location preferences, and active computer presence.
 **Talk** adds a **This Mac** section for Voice Wake, push-to-talk, sounds,
 microphone, and languages. **Updates** adds the app version, automatic update
 preference, and **Check for Updates**. These device settings appear only inside
-the Mac app; ordinary browsers keep the Gateway settings. Talk trigger words
+the OpenClaw app; ordinary browsers keep the Gateway settings. Talk trigger words
 are Gateway settings and remain available in every browser.
+
+On iOS, the group is **This iPhone** or **This iPad**. The device page shows
+appearance, notifications, camera, keep awake, and health summaries when
+available, plus actions to open Diagnostics, Licenses, About, and Apple Watch.
+Only settings published by the app appear; iOS does not show Mac browser or
+app-update controls. Permissions include the access published by the device,
+including limited access to contacts or photos. Precise location is read-only
+on iOS; **Open Settings** opens the system setting. Talk shows the device's
+Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
 ## What it can do (today)
 
